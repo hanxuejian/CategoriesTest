@@ -1,69 +1,15 @@
-# 自定义分类
-有些情况使用分类比创建子类更加方便，也更能提高编码效率。
+//
+//  UIView+HXJUtil.m
+//  CategoriesTest
+//
+//  Created by mayiAngel on 2018/6/25.
+//  Copyright © 2018年 test. All rights reserved.
+//
 
-## 例子一
-将字典中的数据解析为指定的数据模型，在设计时，将所有的类属性名称同字典的键相同，解析时，遍历类的所有属性进行赋值，避免字典中存在类中没有的属性键。
+#import "UIView+HXJUtil.h"
 
-创建一个 NSObject 的分类，如下：
+#import <objc/runtime.h>
 
-```
-@implementation NSObject (HXJUtil)
-
-#pragma mark - 获取类的所有属性名称
-- (NSArray *)allPropertiesName {
-    NSMutableArray *array = [NSMutableArray array];
-    unsigned int outCount;
-    objc_property_t *properties = class_copyPropertyList([self class],&outCount);
-    for (int i = 0;i<outCount;i++,properties++) {
-        [array addObject:[[NSString alloc]initWithUTF8String:property_getName(*properties)]];
-    }
-    return [array copy];
-}
-
-@end
-
-```
-
-而后，在设计数据模型类时，声明同后台获取的字段相同的属性，再声明初始化方法。
-
-```
-- (instancetype)initWithDic:(NSDictionary *)dataDic {
-    if (self = [self init]) {
-        NSArray *properties = [self allPropertiesName];
-        for (NSString *key in [dataDic allKeys]) {
-            if ([properties containsObject:key]) {
-                [self setValue:dataDic[key] forKey:key];
-            }
-        }
-    }
-    return self;
-}
-```
-
-## 例子二
-对于视图，尤其是输入框，存在被键盘遮盖的情况，所以可以设计一个视图分类来监听键盘变化事件，进行相应的处理。
-
-下面的代码实现视图监听键盘变化的快速注册，并且可以绑定当键盘变化时，应该进行相应变化的视图。
-
-```
-@interface UIView (HXJUtil)
-
-///返回视图是否被键盘遮盖，若是，offset 的值表示视图要避免遮盖的位移量
-- (BOOL)isCoveredByBoard:(CGRect)keyboardRect offset:(CGFloat *)offset;
-
-/**
- 注册键盘变化事件，如果当前控件被遮盖，则作出相应的移动
- @param shouldMovedView 键盘变化时，应该移动的控件，如果为 nil ，则默认为当前控件移动
- */
-- (void)registerKeyboardChangeNotification:(UIView *)shouldMovedView;
-
-///取消键盘变化监听事件
-- (void)unregisterKeyboardChangeNotification;
-
-@end
-```
-
-```
 @implementation UIView (HXJUtil)
 
 #pragma mark 判断当前视图是否被键盘遮盖
@@ -100,6 +46,67 @@
     
     *offset = heightOfCovered;
     return CGRectIntersectsRect(rect, keyboardRect);
+}
+
+#pragma mark 判断当前视图是否被键盘遮盖，计算得到的偏移量（负值）要加上要忽略的偏移量
+- (BOOL)isCoveredByBoard:(CGRect)keyboardRect offset:(CGFloat *)offset ignoreOffset:(CGFloat)ignoreOffset {
+    BOOL isCover = [self isCoveredByBoard:keyboardRect offset:offset];
+    *offset = *offset + ignoreOffset;
+    if (*offset > 0) *offset = 0;
+    return isCover;
+}
+
+#pragma mark 判断当前视图是否被其他视图遮盖
+- (BOOL)isCoveredByView:(UIView *)view offset:(CGFloat *)offset {
+    if (!self || !view) {
+        return NO;
+    }
+    if (![self superview]) {
+        return NO;
+    }
+    if (self.hidden || view.hidden) {
+        return NO;
+    }
+    UIWindow *keyWindow = [[UIApplication sharedApplication] keyWindow];
+    
+    CGRect viewRect;
+    if([view isKindOfClass:[UIWindow class]]){
+        viewRect = [(UIWindow*)view convertRect:view.frame toWindow:keyWindow];
+    }else {
+        viewRect = [view.superview convertRect:view.frame toView:keyWindow];
+    }
+    
+    CGRect rect = [self.superview convertRect:self.frame toView:keyWindow];
+    
+    if (CGRectIsEmpty(rect) || CGRectIsNull(rect) || CGSizeEqualToSize(rect.size, CGSizeZero)) {
+        return NO;
+    }
+    CGFloat heightOfCovered = viewRect.origin.y - rect.origin.y - rect.size.height;
+    heightOfCovered = heightOfCovered > -viewRect.size.height ? heightOfCovered : -viewRect.size.height;
+    
+    *offset = heightOfCovered;
+    return CGRectIntersectsRect(rect, viewRect);
+    
+}
+
+- (BOOL)isViewVisiable {
+    UIWindow *keyWindow = [[UIApplication sharedApplication]keyWindow];
+    CGFloat offset;
+    return [self isCoveredByView:keyWindow offset:&offset];
+}
+
+const void *shouldendEditingViewKey = &shouldendEditingViewKey;
+- (void)addGestureHideKeyboard:(UIView *)shouldendEditingView {
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]initWithTarget:self action:@selector(resignKeyBoard:)];
+    self.userInteractionEnabled = YES;
+    [self addGestureRecognizer:tap];
+    objc_setAssociatedObject(self, shouldendEditingViewKey, shouldendEditingView, OBJC_ASSOCIATION_ASSIGN);
+}
+
+- (void)resignKeyBoard:(UITapGestureRecognizer *)tap {
+    UIView *view = objc_getAssociatedObject(self, shouldendEditingViewKey);
+    if (view == nil) view = self;
+    [view endEditing:YES];
 }
 
 #pragma mark - 注册键盘显示及隐藏事件
@@ -172,8 +179,5 @@ const void *shouldMovedViewContentOffsetKey = &shouldMovedViewContentOffsetKey;
         }
     }
 }
-```
 
-可以[参见测试程序](https://github.com/hanxuejian/CategoriesTest)
-
-类似的还有很多，总之学会找寻问题的相似点，并对比各个解决方案，进行归纳总结，抽象出通用的方案，那么才能更好的提升自己。
+@end
